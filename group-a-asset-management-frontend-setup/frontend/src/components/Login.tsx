@@ -3,8 +3,7 @@
 import { useState } from 'react';
 import { Building2, Shield } from 'lucide-react';
 import { WorldlineLogo } from './WorldlineLogo';
-import { useMsal } from '@azure/msal-react';
-import { loginRequest } from '../config/authConfig';
+import { loginRequest, msalInstance } from '../config/authConfig';
 
 type User = {
   id: string;
@@ -18,7 +17,6 @@ type LoginProps = {
 };
 
 export function Login({ onLogin }: LoginProps) {
-  const { instance, accounts } = useMsal();
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -35,7 +33,11 @@ export function Login({ onLogin }: LoginProps) {
     setError(null);
 
     try {
-      const response = await instance.loginPopup(loginRequest);
+      if (!msalInstance) {
+        throw new Error('Azure login is not available. Please use a demo account.');
+      }
+
+      const response = await msalInstance.loginPopup(loginRequest);
       console.log('Azure AD Login successful:', response);
       
       if (response.account) {

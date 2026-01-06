@@ -1,5 +1,7 @@
 import { Package, AlertTriangle, TrendingUp, TrendingDown, Activity, CheckCircle, Clock, XCircle } from 'lucide-react';
 import { BarChart, Bar, LineChart, Line, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { getAssets } from '../services/assetService';
+import { useEffect, useState, useMemo } from 'react';
 
 type User = {
   id: string;
@@ -14,52 +16,85 @@ type DashboardProps = {
 };
 
 export function Dashboard({ user, onNavigate }: DashboardProps) {
-  // Mock statistics
-  const stats = [
-    { label: 'Total Assets', value: '1,247', change: '+12%', trend: 'up', icon: Package, color: 'blue' },
-    { label: 'In Use', value: '892', change: '+5%', trend: 'up', icon: CheckCircle, color: 'green' },
-    { label: 'Under Maintenance', value: '45', change: '-8%', trend: 'down', icon: Clock, color: 'yellow' },
-    { label: 'Active Faults', value: '23', change: '-15%', trend: 'down', icon: AlertTriangle, color: 'red' },
-  ];
+  const [assets, setAssets] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Asset lifecycle data
-  const lifecycleData = [
-    { name: 'Procured', value: 156 },
-    { name: 'In Use', value: 892 },
-    { name: 'Under Maintenance', value: 45 },
-    { name: 'Repaired', value: 98 },
-    { name: 'Decommissioned', value: 56 },
-  ];
+  useEffect(() => {
+    const fetch = async () => {
+      try {
+        const data = await getAssets();
+        setAssets(data);
+      } catch {
+        setAssets([]);
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetch();
+  }, []);
 
-  // Asset category data
-  const categoryData = [
-    { name: 'Hardware', value: 450 },
-    { name: 'Software', value: 320 },
-    { name: 'Peripherals', value: 280 },
-    { name: 'Fleet', value: 150 },
-    { name: 'Other', value: 47 },
-  ];
+  const stats = useMemo(() => {
+    if (loading) return [];
+    const total = assets.length;
+    const inUse = assets.filter(a => a.assetsStatus?.toLowerCase() === 'in use').length;
+    const maintenance = assets.filter(a => a.assetsStatus?.toLowerCase().includes('maintenance')).length;
+    const inactive = assets.filter(a => a.assetsStatus?.toLowerCase() === 'inactive').length;
+    return [
+      { label: 'Total Assets', value: total.toString(), change: '', trend: 'up' as const, icon: Package, color: 'blue' as const },
+      { label: 'In Use', value: inUse.toString(), change: '', trend: 'up' as const, icon: CheckCircle, color: 'green' as const },
+      { label: 'Under Maintenance', value: maintenance.toString(), change: '', trend: 'down' as const, icon: Clock, color: 'yellow' as const },
+      { label: 'Inactive', value: inactive.toString(), change: '', trend: 'down' as const, icon: XCircle, color: 'red' as const },
+    ];
+  }, [assets, loading]);
 
-  // Monthly trend data
-  const trendData = [
-    { month: 'Jan', assets: 1100, faults: 45 },
-    { month: 'Feb', assets: 1150, faults: 38 },
-    { month: 'Mar', assets: 1180, faults: 42 },
-    { month: 'Apr', assets: 1200, faults: 35 },
-    { month: 'May', assets: 1220, faults: 30 },
-    { month: 'Jun', assets: 1247, faults: 23 },
-  ];
+  const lifecycleData = useMemo(() => {
+    if (loading) return [];
+    const statusCounts = assets.reduce((acc, a) => {
+      const status = a.assetsStatus || 'Unknown';
+      acc[status] = (acc[status] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    return Object.entries(statusCounts).map(([name, value]) => ({ name, value }));
+  }, [assets, loading]);
 
-  const COLORS = ['#00A3A1', '#10B981', '#F59E0B', '#EF4444', '#00BBD3'];
+  const categoryData = useMemo(() => {
+    if (loading) return [];
+    const catCounts = assets.reduce((acc, a) => {
+      const cat = a.laptopCategory || 'Other';
+      acc[cat] = (acc[cat] || 0) + 1;
+      return acc;
+    }, {} as Record<string, number>);
+    return Object.entries(catCounts).map(([name, value]) => ({ name, value }));
+  }, [assets, loading]);
 
-  // Recent activities
-  const recentActivities = [
-    { id: 1, type: 'asset', action: 'Laptop Dell XPS 15 checked out to John Doe', time: '5 min ago' },
-    { id: 2, type: 'fault', action: 'Printer fault #1234 resolved by Mike Tech', time: '15 min ago' },
-    { id: 3, type: 'asset', action: 'New asset received: Desktop HP EliteDesk', time: '1 hour ago' },
-    { id: 4, type: 'maintenance', action: 'Scheduled maintenance for Server Room AC', time: '2 hours ago' },
-    { id: 5, type: 'transfer', action: 'Asset transferred from IT Dept to Finance', time: '3 hours ago' },
-  ];
+  const recentActivities = useMemo(() => {
+    if (loading) return [];
+    const activities: any[] = [];
+    assets.forEach(asset => {
+      if (asset.movements) {
+        asset.movements.forEach((m: any) => {
+          activities.push({
+            id: `${asset.assetId}-${m.movementDate}`,
+            type: 'asset',
+            action: `${asset.make} ${asset.model} moved from ${m.fromLocation || 'N/A'} to ${m.toLocation || 'N/A'}`,
+            time: new Date(m.movementDate).toLocaleString(),
+          });
+        });
+      }
+      if (asset.maintenanceHistory) {
+        asset.maintenanceHistory.forEach((m: any) => {
+          activities.push({
+            id: `maint-${asset.assetId}-${m.maintenanceDate}`,
+            type: 'maintenance',
+            action: `Maintenance: ${m.description} on ${asset.make} ${asset.model}`,
+            time: new Date(m.maintenanceDate).toLocaleString(),
+          });
+        });
+      }
+    });
+    return activities.sort((a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()).slice(0, 5);
+  }, [assets, loading]);
+
 
   return (
     <div className="space-y-6">
@@ -103,57 +138,50 @@ export function Dashboard({ user, onNavigate }: DashboardProps) {
         {/* Asset Lifecycle Chart */}
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
           <h3 className="text-gray-900 mb-4">Asset Lifecycle Status</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <BarChart data={lifecycleData}>
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="name" />
-              <YAxis />
-              <Tooltip />
-              <Bar dataKey="value" fill="#00A3A1" />
-            </BarChart>
-          </ResponsiveContainer>
+          {lifecycleData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <BarChart data={lifecycleData}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="name" />
+                <YAxis />
+                <Tooltip />
+                <Bar dataKey="value" fill="#00A3A1" />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-gray-400">No data</div>
+          )}
         </div>
 
         {/* Asset Categories Chart */}
         <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
           <h3 className="text-gray-900 mb-4">Asset Categories</h3>
-          <ResponsiveContainer width="100%" height={300}>
-            <PieChart>
-              <Pie
-                data={categoryData}
-                cx="50%"
-                cy="50%"
-                labelLine={false}
-                label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
-                outerRadius={100}
-                fill="#8884d8"
-                dataKey="value"
-              >
-                {categoryData.map((entry, index) => (
-                  <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                ))}
-              </Pie>
-              <Tooltip />
-            </PieChart>
-          </ResponsiveContainer>
+          {categoryData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={300}>
+              <PieChart>
+                <Pie
+                  data={categoryData}
+                  cx="50%"
+                  cy="50%"
+                  labelLine={false}
+                  label={({ name, percent }) => `${name} ${(percent * 100).toFixed(0)}%`}
+                  outerRadius={100}
+                  fill="#8884d8"
+                  dataKey="value"
+                >
+                  {categoryData.map((entry, index) => (
+                    <Cell key={`cell-${index}`} fill={['#00A3A1', '#10B981', '#F59E0B', '#EF4444', '#00BBD3'][index % 5]} />
+                  ))}
+                </Pie>
+                <Tooltip />
+              </PieChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-[300px] flex items-center justify-center text-gray-400">No data</div>
+          )}
         </div>
       </div>
 
-      {/* Trend Chart */}
-      <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
-        <h3 className="text-gray-900 mb-4">Asset & Fault Trends (Last 6 Months)</h3>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={trendData}>
-            <CartesianGrid strokeDasharray="3 3" />
-            <XAxis dataKey="month" />
-            <YAxis />
-            <Tooltip />
-            <Legend />
-            <Line type="monotone" dataKey="assets" stroke="#00A3A1" strokeWidth={2} name="Total Assets" />
-            <Line type="monotone" dataKey="faults" stroke="#EF4444" strokeWidth={2} name="Active Faults" />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
 
       {/* Recent Activity */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
@@ -162,15 +190,19 @@ export function Dashboard({ user, onNavigate }: DashboardProps) {
           <Activity className="w-5 h-5 text-gray-400" />
         </div>
         <div className="space-y-3">
-          {recentActivities.map((activity) => (
-            <div key={activity.id} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
-              <div className="w-2 h-2 bg-[#00A3A1] rounded-full mt-2"></div>
-              <div className="flex-1">
-                <p className="text-gray-900">{activity.action}</p>
-                <p className="text-gray-500">{activity.time}</p>
+          {recentActivities.length > 0 ? (
+            recentActivities.map((activity) => (
+              <div key={activity.id} className="flex items-start gap-3 p-3 bg-gray-50 rounded-lg">
+                <div className="w-2 h-2 bg-[#00A3A1] rounded-full mt-2"></div>
+                <div className="flex-1">
+                  <p className="text-gray-900">{activity.action}</p>
+                  <p className="text-gray-500">{activity.time}</p>
+                </div>
               </div>
-            </div>
-          ))}
+            ))
+          ) : (
+            <p className="text-gray-400">No recent activity</p>
+          )}
         </div>
       </div>
 

@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { ArrowRight, Package, User, MapPin, Calendar, CheckCircle, XCircle, Clock } from 'lucide-react';
+import { getAssets, createMovement, CreateMovementRequest } from '../services/assetService.ts';
 
 type User = {
   id: string;
@@ -10,6 +11,7 @@ type User = {
 
 type Movement = {
   id: string;
+  assetId?: string;
   assetTag: string;
   assetName: string;
   movementType: 'Check-Out' | 'Check-In' | 'Transfer' | 'Receive';
@@ -31,76 +33,173 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
   const [movementType, setMovementType] = useState<'Check-Out' | 'Check-In' | 'Transfer' | 'Receive'>('Check-Out');
   const [showForm, setShowForm] = useState(false);
 
-  // Mock movement data
-  const mockMovements: Movement[] = [
-    {
-      id: '1',
-      assetTag: 'LAP-001',
-      assetName: 'Dell XPS 15',
-      movementType: 'Check-Out',
-      from: 'IT Storage',
-      to: 'John Doe - Marketing',
-      custodian: 'John Doe',
-      date: '2024-06-10 14:30',
-      status: 'Completed',
-      notes: 'New employee onboarding',
-      requestedBy: 'Sarah Manager',
-    },
-    {
-      id: '2',
-      assetTag: 'PRN-005',
-      assetName: 'Canon ImageClass Printer',
-      movementType: 'Transfer',
-      from: 'Building A - Floor 2',
-      to: 'Building B - Floor 1',
-      custodian: 'Finance Team',
-      date: '2024-06-09 10:15',
-      status: 'Completed',
-      notes: 'Department relocation',
-      requestedBy: 'Asset Manager',
-    },
-    {
-      id: '3',
-      assetTag: 'DSK-012',
-      assetName: 'HP EliteDesk 800',
-      movementType: 'Receive',
-      from: 'HP Vendor',
-      to: 'Warehouse',
-      custodian: 'Warehouse Team',
-      date: '2024-06-08 09:00',
-      status: 'Completed',
-      notes: 'New procurement - PO #12345',
-      requestedBy: 'Procurement Team',
-    },
-    {
-      id: '4',
-      assetTag: 'LAP-023',
-      assetName: 'MacBook Pro 16"',
-      movementType: 'Check-In',
-      from: 'Michael Brown - Development',
-      to: 'IT Storage',
-      custodian: 'N/A',
-      date: '2024-06-07 16:45',
-      status: 'Completed',
-      notes: 'Employee resignation - asset return',
-      requestedBy: 'IT Manager',
-    },
-    {
-      id: '5',
-      assetTag: 'MON-008',
-      assetName: 'LG UltraWide 34"',
-      movementType: 'Check-Out',
-      from: 'Warehouse',
-      to: 'Design Team',
-      custodian: 'Emma Wilson',
-      date: '2024-06-11 11:20',
-      status: 'Pending',
-      notes: 'Additional monitor for design work',
-      requestedBy: 'Design Manager',
-    },
-  ];
+  const [assets, setAssets] = useState<any[]>([]);
+  const [loadingAssets, setLoadingAssets] = useState(false);
+  const [saving, setSaving] = useState(false);
 
-  const [movements] = useState<Movement[]>(mockMovements);
+  const [optimisticMovements, setOptimisticMovements] = useState<Movement[]>([]);
+
+  const getCurrentTimeHHMM = () => {
+    const d = new Date();
+    const hh = String(d.getHours()).padStart(2, '0');
+    const mm = String(d.getMinutes()).padStart(2, '0');
+    return `${hh}:${mm}`;
+  };
+
+  const [movementForm, setMovementForm] = useState({
+    assetId: '',
+    movementType: 'Checked Out',
+    fromLocation: '',
+    toLocation: '',
+    movedBy: '',
+    movementDate: new Date().toISOString().split('T')[0],
+    movementTime: getCurrentTimeHHMM(),
+  });
+
+  const fetchAssets = async () => {
+    try {
+      setLoadingAssets(true);
+      const data = await getAssets();
+      setAssets(data);
+    } finally {
+      setLoadingAssets(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchAssets().catch(console.error);
+  }, []);
+
+  const movements = useMemo(() => {
+    const rows = (assets ?? []).flatMap((a: any) => {
+      const assetTag = a?.laptopAssetsTag ?? '';
+      const assetName = `${a?.make ?? ''} ${a?.model ?? ''}`.trim();
+      return (a?.movements ?? []).map((m: any, idx: number) => ({
+        id: `${a?.assetId ?? 'a'}-${m?.movementDate ?? idx}-${idx}`,
+        assetId: String(a?.assetId ?? ''),
+        assetTag,
+        assetName,
+        movementType: (m?.movementType ?? 'Transfer') as any,
+        from: m?.fromLocation ?? '-',
+        to: m?.toLocation ?? '-',
+        custodian: '-',
+        date: m?.movementDate ?? new Date().toISOString(),
+        status: 'Completed' as const,
+        notes: '',
+        requestedBy: m?.movedBy ?? '-',
+      }));
+    });
+
+    rows.sort((x: any, y: any) => new Date(y.date).getTime() - new Date(x.date).getTime());
+    return rows;
+  }, [assets]);
+
+  const movementsMerged = useMemo(() => {
+    if (optimisticMovements.length === 0) return movements;
+
+    const dateOnly = (v: string) => String(v || '').slice(0, 10);
+
+    // Keep optimistic movements (with time) and filter out backend entries that match
+    // the same movement (backend may store DATE-only, losing time).
+    const filteredBackend = movements.filter((m) => {
+      return !optimisticMovements.some((o) => {
+        return (
+          (o.assetId || '') === (m.assetId || '') &&
+          o.movementType === m.movementType &&
+          o.from === m.from &&
+          o.to === m.to &&
+          o.requestedBy === m.requestedBy &&
+          dateOnly(o.date) === dateOnly(m.date)
+        );
+      });
+    });
+
+    const merged = [...optimisticMovements, ...filteredBackend];
+    merged.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+    return merged;
+  }, [movements, optimisticMovements]);
+
+  const movementsToShow = activeTab === 'new' ? movementsMerged.slice(0, 10) : movementsMerged;
+
+  const setMovementTypeAndRequest = (
+    type: 'Check-Out' | 'Check-In' | 'Transfer' | 'Receive'
+  ) => {
+    setMovementType(type);
+    const mapping: Record<typeof type, CreateMovementRequest['movementType']> = {
+      'Check-Out': 'Checked Out',
+      'Check-In': 'Checked In',
+      'Transfer': 'Transfer',
+      'Receive': 'Receive',
+    };
+    setMovementForm((p) => ({ ...p, movementType: mapping[type] }));
+  };
+
+  const handleCreateMovement = async () => {
+    if (!movementForm.assetId || !movementForm.movedBy || !movementForm.movementDate) {
+      alert('Please fill all required fields.');
+      return;
+    }
+
+    try {
+      setSaving(true);
+
+      // Send full datetime so time is preserved (requires DB column to be datetime/datetime2).
+      const movementDateTime = movementForm.movementTime
+        ? `${movementForm.movementDate}T${movementForm.movementTime}:00`
+        : movementForm.movementDate;
+
+      await createMovement(movementForm.assetId, {
+        movementType: movementForm.movementType,
+        fromLocation: movementForm.fromLocation || undefined,
+        toLocation: movementForm.toLocation || undefined,
+        movedBy: movementForm.movedBy,
+        movementDate: movementDateTime,
+      });
+
+      // Show the newly created movement immediately (with time) at the top.
+      const selectedAsset = assets.find((a: any) => String(a.assetId) === String(movementForm.assetId));
+      const optimistic: Movement = {
+        id: `optimistic-${movementForm.assetId}-${movementDateTime}`,
+        assetId: String(movementForm.assetId),
+        assetTag: selectedAsset?.laptopAssetsTag ?? '',
+        assetName: `${selectedAsset?.make ?? ''} ${selectedAsset?.model ?? ''}`.trim(),
+        movementType: (movementType as any),
+        from: movementForm.fromLocation || '-',
+        to: movementForm.toLocation || '-',
+        custodian: '-',
+        date: movementDateTime,
+        status: 'Completed',
+        notes: '',
+        requestedBy: movementForm.movedBy,
+      };
+      setOptimisticMovements((prev) => [optimistic, ...prev].slice(0, 10));
+
+      setShowForm(false);
+      setMovementForm({
+        assetId: '',
+        movementType: 'Checked Out',
+        fromLocation: '',
+        toLocation: '',
+        movedBy: '',
+        movementDate: new Date().toISOString().split('T')[0],
+        movementTime: getCurrentTimeHHMM(),
+      });
+      await fetchAssets();
+    } catch (e: any) {
+      const message =
+        e?.response?.data?.detail ||
+        e?.response?.data?.title ||
+        e?.response?.data ||
+        e?.message ||
+        'Failed to create movement.';
+      alert(String(message));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  // Mock movement data
+  const _unusedMockMovements: Movement[] = [];
 
   const getStatusIcon = (status: string) => {
     switch (status) {
@@ -132,6 +231,22 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
       'Receive': 'bg-green-100 text-green-700',
     };
     return colors[type as keyof typeof colors] || 'bg-gray-100 text-gray-700';
+  };
+
+  const formatMovementDateTime = (value: string) => {
+    if (!value) return '-';
+
+    // If backend returns DATE only (YYYY-MM-DD), avoid showing 12:00:00 AM.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      const d = new Date(`${value}T00:00:00`);
+      return d.toLocaleDateString();
+    }
+
+    const d = new Date(value);
+    if (Number.isNaN(d.getTime())) return String(value);
+
+    const isMidnight = d.getHours() === 0 && d.getMinutes() === 0 && d.getSeconds() === 0;
+    return isMidnight ? d.toLocaleDateString() : d.toLocaleString();
   };
 
   return (
@@ -177,7 +292,7 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
 
       {/* Movement Cards */}
       <div className="space-y-4">
-        {movements.map((movement) => (
+        {movementsToShow.map((movement) => (
           <div key={movement.id} className="bg-white rounded-xl p-6 shadow-sm border border-gray-200">
             <div className="flex items-start justify-between mb-4">
               <div className="flex items-start gap-4">
@@ -219,7 +334,7 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
 
                     <div className="flex items-start gap-2 text-gray-600">
                       <Calendar className="w-4 h-4 mt-1" />
-                      <div>{new Date(movement.date).toLocaleString()}</div>
+                      <div>{formatMovementDateTime(movement.date)}</div>
                     </div>
                   </div>
 
@@ -233,6 +348,12 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
             </div>
           </div>
         ))}
+        {!loadingAssets && movementsToShow.length === 0 && (
+          <div className="text-center py-12 text-gray-500">No movements found</div>
+        )}
+        {loadingAssets && (
+          <div className="text-center py-12 text-gray-500">Loading...</div>
+        )}
       </div>
 
       {/* New Movement Form Modal */}
@@ -249,7 +370,7 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                   {(['Check-Out', 'Check-In', 'Transfer', 'Receive'] as const).map((type) => (
                     <button
                       key={type}
-                      onClick={() => setMovementType(type)}
+                      onClick={() => setMovementTypeAndRequest(type)}
                       className={`px-4 py-2 rounded-lg border-2 transition-colors ${
                         movementType === type
                           ? 'border-blue-600 bg-blue-50 text-blue-600'
@@ -265,12 +386,17 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
               {/* Asset Selection */}
               <div>
                 <label className="block text-gray-700 mb-2">Asset *</label>
-                <select className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                <select
+                  value={movementForm.assetId}
+                  onChange={(e) => setMovementForm((p) => ({ ...p, assetId: e.target.value }))}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
+                >
                   <option value="">Select an asset...</option>
-                  <option>LAP-001 - Dell XPS 15</option>
-                  <option>DSK-002 - HP EliteDesk 800</option>
-                  <option>PRN-003 - Canon ImageClass</option>
-                  <option>MON-004 - LG UltraWide 34"</option>
+                  {assets.map((a: any) => (
+                    <option key={a.assetId} value={String(a.assetId)}>
+                      {a.laptopAssetsTag} - {a.make} {a.model}
+                    </option>
+                  ))}
                 </select>
               </div>
 
@@ -282,6 +408,8 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                 <input
                   type="text"
                   placeholder={movementType === 'Receive' ? 'Enter vendor name' : 'Enter current location'}
+                  value={movementForm.fromLocation}
+                  onChange={(e) => setMovementForm((p) => ({ ...p, fromLocation: e.target.value }))}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -294,6 +422,8 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                 <input
                   type="text"
                   placeholder={movementType === 'Check-Out' ? 'Employee name or department' : 'Enter destination location'}
+                  value={movementForm.toLocation}
+                  onChange={(e) => setMovementForm((p) => ({ ...p, toLocation: e.target.value }))}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               </div>
@@ -305,6 +435,8 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                   <input
                     type="text"
                     placeholder="Enter custodian name"
+                    value={movementForm.movedBy}
+                    onChange={(e) => setMovementForm((p) => ({ ...p, movedBy: e.target.value }))}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -316,6 +448,8 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                   <label className="block text-gray-700 mb-2">Date *</label>
                   <input
                     type="date"
+                    value={movementForm.movementDate}
+                    onChange={(e) => setMovementForm((p) => ({ ...p, movementDate: e.target.value }))}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -323,6 +457,8 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
                   <label className="block text-gray-700 mb-2">Time *</label>
                   <input
                     type="time"
+                    value={movementForm.movementTime}
+                    onChange={(e) => setMovementForm((p) => ({ ...p, movementTime: e.target.value }))}
                     className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -343,10 +479,15 @@ export function InventoryMovement({ user }: InventoryMovementProps) {
               <button
                 onClick={() => setShowForm(false)}
                 className="flex-1 px-4 py-2 bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 transition-colors"
+                disabled={saving}
               >
                 Cancel
               </button>
-              <button className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+              <button
+                className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                onClick={handleCreateMovement}
+                disabled={saving}
+              >
                 Create Movement
               </button>
             </div>

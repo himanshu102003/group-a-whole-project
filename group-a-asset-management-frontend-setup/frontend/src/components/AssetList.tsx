@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Search, Filter, Download, Upload, Plus, Eye, Edit2, QrCode, MoreVertical, Trash2, Activity, ArrowRight } from "lucide-react";
+import { Search, Filter, Download, Upload, Plus, Eye, Edit2, QrCode, MoreVertical, Trash2, Activity, ArrowRight, ChevronDown, ChevronUp } from "lucide-react";
 import { createAsset, CreateAssetRequest, deleteAsset, getAssets, updateAssetStatusLocation, UpdateAssetStatusLocationRequest, Asset as BackendAsset, createMovement, CreateMovementRequest } from "../services/assetService.ts";
 
 type User = {

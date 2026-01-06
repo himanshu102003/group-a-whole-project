@@ -8,7 +8,31 @@
     </head>
 
     <body>
-      <div id="root"></div>
+      <div id="root" style="font-family: system-ui; padding: 16px;">
+        Loading AssetFlow...
+      </div>
+
+      <script>
+        // If the Vite bundle fails to load or crashes before mount, show something useful.
+        setTimeout(function () {
+          try {
+            var mounted = window.__ASSETFLOW_MOUNTED__;
+            if (!mounted) {
+              var el = document.getElementById('root');
+              if (el) {
+                el.innerHTML =
+                  '<div style="padding:16px">' +
+                  '<h2 style="margin:0 0 8px">App did not start</h2>' +
+                  '<div style="color:#444">Open DevTools (F12) → Console to see the error.</div>' +
+                  '<div style="color:#444; margin-top:8px">Also confirm backend: http://localhost:5219/api/assets</div>' +
+                  '</div>';
+              }
+            }
+          } catch (e) {
+            // ignore
+          }
+        }, 2000);
+      </script>
       <script type="module" src="/src/main.tsx"></script>
     </body>
   </html>

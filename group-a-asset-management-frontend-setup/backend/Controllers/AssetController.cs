@@ -68,6 +68,7 @@ public class AssetsController : ControllerBase
             .Include(a => a.TechnicalSpecification)
             .Include(a => a.Assignment)
             .Include(a => a.Movements)
+            .Include(a => a.MaintenanceHistory)
             .ToListAsync();
         return Ok(assets);
     }
@@ -280,25 +281,52 @@ public class AssetsController : ControllerBase
     {
         try
         {
+            await using var tx = await _context.Database.BeginTransactionAsync();
+
             var asset = await _context.Assets
-                .Include(a => a.Assignment)
                 .FirstOrDefaultAsync(a => a.AssetId == id);
 
             if (asset == null)
                 return NotFound();
 
-            if (asset.Assignment != null)
-                _context.AssetAssignments.Remove(asset.Assignment);
+            // Delete dependents explicitly (avoids relying on navigation loading)
+            var assignments = await _context.AssetAssignments
+                .Where(x => x.AssetId == id)
+                .ToListAsync();
+            if (assignments.Count > 0)
+                _context.AssetAssignments.RemoveRange(assignments);
+
+            var specs = await _context.AssetTechnicalSpecifications
+                .Where(x => x.AssetId == id)
+                .ToListAsync();
+            if (specs.Count > 0)
+                _context.AssetTechnicalSpecifications.RemoveRange(specs);
+
+            var movements = await _context.AssetMovementHistories
+                .Where(x => x.AssetId == id)
+                .ToListAsync();
+            if (movements.Count > 0)
+                _context.AssetMovementHistories.RemoveRange(movements);
+
+            var maintenance = await _context.AssetMaintenanceHistories
+                .Where(x => x.AssetId == id)
+                .ToListAsync();
+            if (maintenance.Count > 0)
+                _context.AssetMaintenanceHistories.RemoveRange(maintenance);
 
             _context.Assets.Remove(asset);
             await _context.SaveChangesAsync();
+
+            await tx.CommitAsync();
 
             return NoContent();
         }
         catch (Exception ex)
         {
+            var baseMessage = ex.GetBaseException().Message;
+            var detail = $"{ex.Message} | Base: {baseMessage}";
             return Problem(
-                detail: ex.Message,
+                detail: detail,
                 title: "Failed to delete asset",
                 statusCode: StatusCodes.Status500InternalServerError
             );
